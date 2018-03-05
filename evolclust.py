@@ -472,7 +472,10 @@ def get_threshold_scores(cl1,cl2,conversion,thresholds,prot):
 				if current_score != 1.0:
 					if prot in cl1[a:a+s]:
 						cluster2 = trim_clusters(cl2,cl2T,cl1T[a:a+s])
-						score = calculate_score(cl1[a:a+s],cluster2,conversion)
+						if len(cluster2) != 0:
+							score = calculate_score(cl1[a:a+s],cluster2,conversion)
+						else:
+							score = 0.0
 						if score > current_score:
 							current_score = score
 			if prot in thresholds[s]:
@@ -726,25 +729,24 @@ def delete_multiple_duplications(spe,cl,conversion):
 
 def run_mcl(clusters,clDir,tmpDir,outfileMCL):
 	clustList = clusters.keys()
-	if not os.path.exists(outfileMCL):
-		outfile = open(tmpDir+"/mcl_list.txt","w")
-		for a in range(0,len(clustList)):
-			name1 = clustList[a]
-			codes1 = set(clusters[name1])
-			for b in range(0,len(clustList)):
-				name2 = clustList[b]
-				codes2 = set(clusters[name2])
-				common = codes1.intersection(codes2)
-				overlap = float(len(common)) / (float(len(codes1)+len(codes2))/2.0)
-				if overlap >= 0.33:
-					print >>outfile,name1+"\t"+name2+"\t"+str(overlap)
-				else:
-					pass
-		outfile.close()
-		cmd = "mcl "+tmpDir+"/mcl_list.txt --abc"
-		run_command(cmd,False)
-		cmd = "mv out.mcl_list.txt.I20 "+outfileMCL
-		run_command(cmd,False)
+	outfile = open(tmpDir+"/mcl_list.txt","w")
+	for a in range(0,len(clustList)):
+		name1 = clustList[a]
+		codes1 = set(clusters[name1])
+		for b in range(0,len(clustList)):
+			name2 = clustList[b]
+			codes2 = set(clusters[name2])
+			common = codes1.intersection(codes2)
+			overlap = float(len(common)) / (float(len(codes1)+len(codes2))/2.0)
+			if overlap >= 0.33:
+				print >>outfile,name1+"\t"+name2+"\t"+str(overlap)
+			else:
+				pass
+	outfile.close()
+	cmd = "mcl "+tmpDir+"/mcl_list.txt --abc"
+	run_command(cmd,False)
+	cmd = "mv out.mcl_list.txt.I20 "+outfileMCL
+	run_command(cmd,False)
 
 def list_all_genes(clusters):
 	prots = set([])
@@ -959,11 +961,13 @@ if args.filter_clusters:
 		clusters2 = {}
 		num = 1
 		name = "CL_"+spe
+		print "Processing "+spe
 		for cl in clusters:
 			code = "%s_%.5d" % (name,num)
 			num += 1
-			clusters2[cl] = cl.split(";")
-			print >>outfile,cl+"\t"+line
+			clusters2[code] = cl.split(";")
+			print >>outfile,code+"\t"+cl
+		outfile.close()
 		#Run the mcl analysis on the clusters predicted within each species
 		outfileMCL = clDir+"/"+spe+".out.mcl"
 		run_mcl(clusters2,clDir,tmpDir,outfileMCL)
@@ -1087,4 +1091,3 @@ if args.clusterFam_filter:
 	outfile.close()
 
 		
-
