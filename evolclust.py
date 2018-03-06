@@ -509,6 +509,7 @@ def print_thresholds(spe1,spe2,outDir,thresholds,all_proteins):
 		print >>outfile,"%d\t%.3f\t%.3f\t%.3f" %(size,average,std,thr)
 		thresholds2[size] = thr
 	outfile.close()
+	exit()
 	return thresholds2
 
 ########################################################################	
@@ -546,7 +547,7 @@ def calculate_score(cluster1,cluster2,conversion):
 	common1 = len([x for x in cl1 if x in cl2])
 	common2 = len([x for x in cl2 if x in cl1])
 	#print "Number of common proteins:",common1,common2
-	if common1 < minSize or common2 < minSize:
+	if common1 < 2 or common2 < 2:
 		#At least the cluster has to have two homologous proteins for it to be considered
 		score = 0.0
 	else:
@@ -1091,3 +1092,4 @@ if args.clusterFam_filter:
 	outfile.close()
 
 		
+
