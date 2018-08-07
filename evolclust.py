@@ -23,6 +23,10 @@ import os
 from random import randint
 import subprocess as sp
 import sys
+import rpy2
+import rpy2.robjects as robjects
+from rpy2.robjects.packages import importr
+
 
 ########################################################################
 # Operational modules
@@ -34,7 +38,7 @@ def create_folder(name):
 		cmd = "mkdir "+name
 		try:
 			run_command(cmd,False)
-			print "Created Folder"
+			# ~ print "Created Folder"
 		except:
 			print "Unable to create directory ",name
 
@@ -364,7 +368,7 @@ def trim_clusters(cluster1,cluster1Trans,cluster2Trans):
 ########################################################################
 
 #Calculates all clusters and from there it obtains the thresholds and the list of clusters that pass the filters.
-def get_clusters_and_thresholds(pairs,minSize,maxSize,conversion,set_difference):
+def get_clusters_and_thresholds(pairs,minSize,maxSize,conversion,set_difference,thr_mode):
 	allClusters = {}
 	total = len(pairs)
 	num = 0
@@ -389,8 +393,8 @@ def get_clusters_and_thresholds(pairs,minSize,maxSize,conversion,set_difference)
 		if size1 >= minSize and size2 >= minSize:
 			thresholds1 = get_threshold_scores(cl1,cl2,conversion,thresholds1,p1)
 			thresholds2 = get_threshold_scores(cl2,cl1,conversion,thresholds2,p2)
-	thresholds1 = print_thresholds(args.species1,args.species2,thresholdsPath,thresholds1,all_proteins1)
-	thresholds2 = print_thresholds(args.species2,args.species1,thresholdsPath,thresholds2,all_proteins2)
+	thresholds1 = print_thresholds(args.species1,args.species2,thresholdsPath,thresholds1,all_proteins1,thr_mode)
+	thresholds2 = print_thresholds(args.species2,args.species1,thresholdsPath,thresholds2,all_proteins2,thr_mode)
 	#Filter clusters based on thresholds
 	path = args.outDir+"/clusters_from_pairs/"
 	pathAll = args.outDir+"/all_cluster_predictions/"
@@ -484,7 +488,7 @@ def get_threshold_scores(cl1,cl2,conversion,thresholds,prot):
 	return thresholds
 
 #Summarize and print thresholds in a file for record keeping
-def print_thresholds(spe1,spe2,outDir,thresholds,all_proteins):
+def print_thresholds(spe1,spe2,outDir,thresholds,all_proteins,thr_mode):
 	outDir = outDir+"/"+spe1
 	create_folder(outDir)
 	outfile = open(outDir+"/"+spe2+".txt","w")
@@ -499,15 +503,73 @@ def print_thresholds(spe1,spe2,outDir,thresholds,all_proteins):
 				values.append(0.0)
 			else:
 				values.append(thresholds[size][code])
-		average = numpy.average(values)
-		std = numpy.std(values)
-		thr = average + 2.0*std
-		if thr > 1.0:
-			thr = 1.0
-		print >>outfile,"%d\t%.3f\t%.3f\t%.3f" %(size,average,std,thr)
+		if thr_mode == "2stdv":
+			thr = calculate_threshold1(values)
+		elif thr_mode == "3stdv":
+			thr = calculate_threshold2(values)
+		elif thr_mode == "1stdv":
+			thr = calculate_threshold3(values)
+		elif thr_mode == "90_percent":
+			thr = calculate_threshold4(values)
+		elif thr_mode == "75_percent":
+			thr = calculate_threshold5(values)
+		elif thr_mode == "non_parametric":
+			thr = calculate_threshold6(values)
+		print >>outfile,"%d\t%.3f" %(size,thr)
 		thresholds2[size] = thr
 	outfile.close()
 	return thresholds2
+
+#Threshold 1: average + 2stdv
+def calculate_threshold1(values):
+	average = numpy.average(values)
+	std = numpy.std(values)
+	thr = average + 2.0*std
+	if thr > 1.0:
+		thr = 1.0
+	return thr
+
+#Threshold 2: average + 3stdv
+def calculate_threshold2(values):
+	average = numpy.average(values)
+	std = numpy.std(values)
+	thr = average + 3.0*std
+	if thr > 1.0:
+		thr = 1.0
+	return thr
+
+#Threshold 3: average + 1stdv
+def calculate_threshold3(values):
+	average = numpy.average(values)
+	std = numpy.std(values)
+	thr = average + 1*std
+	if thr > 1.0:
+		thr = 1.0
+	return thr
+
+#Threshold 4: takes value below which 90% of the data can be found
+def calculate_threshold4(values):
+	values.sort()
+	num = int(float(len(values)) * 0.9)
+	print len(values),num
+	thr = values[num]
+	return thr
+
+#Threshold 5: takes value below which 75% of the data can be found
+def calculate_threshold5(values):
+	values.sort()
+	num = int(float(len(values)) * 0.75)
+	thr = values[num]
+	return thr
+
+#Threshold 6: calculates non-parametric tolerance intervals using the wilks method
+def calculate_threshold6(values):
+	vals = robjects.FloatVector(values)
+	results = tolerance.nptol_int(vals,alpha=0.05,P=0.99,side=1,method="WILKS")
+	return results[3][0]
+	
+
+
 
 ########################################################################	
 # Calculate scores
@@ -1087,6 +1149,7 @@ parser.add_argument("-d","--outdir",dest="outDir",action="store",default="./geno
 parser.add_argument("--minSize",dest="minSize",action="store",default=5,help="Minimum size a cluster needs to have to be considered. Default is set to 5")
 parser.add_argument("--maxSize",dest="maxSize",action="store",default=35,help="Maximum size a cluster needs to have to be considered. Default is set to 35")
 parser.add_argument("--non_homologs",dest="non_homologs",action="store",default=3,help="Number of non-homologous genes needed to split a cluster")
+parser.add_argument("--threshold",dest="thr",action="store",choices=["2stdv","3stdv","1stdv","90percent","75percent","non_parametric"],default="2stdv",help="Way to calculate the thresholds to accept a conserved region as cluster")
 parser.add_argument("--build_jobs",dest="buildJobs",action="store_true",help="Will prepare the files so that trees can be build. Needs to have the -i and -d options as full paths")
 parser.add_argument("--initial_files",dest="conv",action="store_true",help="Will prompt the program to create the initial files")
 parser.add_argument("--get_pairwise_clusters",dest="calc_scores_pairs",action="store_true",help="Main program in the genome walking - starts from pairs files")
@@ -1158,7 +1221,12 @@ if args.calc_scores_pairs:
 	#Get clusters and thresholds
 	thresholdsPath = args.outDir+"/thresholds/"
 	create_folder(thresholdsPath)
-	get_clusters_and_thresholds(pairs,minSize,maxSize,conversion,set_difference)
+	if args.thr == "non_parametric":
+		try:
+			tolerance = importr("tolerance")
+		except:
+			exit("For this threshold mode you need to install the R-package tolerance: https://cran.r-project.org/web/packages/tolerance/tolerance.pdf")
+	get_clusters_and_thresholds(pairs,minSize,maxSize,conversion,set_difference,args.thr)
 
 #This will create a single list with all the clusters found. For each species it performs a mcl to remove redundancy and then creates a unique list
 #NEEDS TO BE RUN AFTER ALL CLUSTERS HAVE BEEN CALCULATED
@@ -1334,6 +1402,7 @@ if args.clusterFam_complete:
 		species = set([x.split("_")[0] for x in cluster_families[cf]])
 		#Search for candidates suitable to add to the family.
 		candidates = get_candidates(cluster_families[cf],all_clusters,thresholds,maxSize,set_difference)
+		print candidates
 		#Join all the predictions from the different clusters
 		single_candidates = {}
 		for spe1 in candidates:
