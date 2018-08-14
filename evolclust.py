@@ -205,7 +205,7 @@ def build_pairs(fileName,outDir):
 
 
 #Creates jobs list that will automatize the process
-def create_jobs(outDir,tagName):
+def create_jobs(outDir,tagName,thrMode):
 	#Create folder
 	outJob = outDir+"/jobs/"
 	create_folder(outJob)
@@ -223,7 +223,7 @@ def create_jobs(outDir,tagName):
 				if i != j:
 					spe2 = species[j]
 					if i > j:
-						print >>outfile,"python "+args.pathEvolClust+" -s1 "+spe1+" -s2 "+spe2+" --get_pairwise_clusters -d "+args.outDir
+						print >>outfile,"python "+args.pathEvolClust+" -s1 "+spe1+" -s2 "+spe2+" --get_pairwise_clusters -d "+args.outDir+" --threshold "+thrMode
 		outfile.close()
 		outfileName = outJob+"jobs.step1.txt"
 	elif tagName == "comparison":
@@ -509,9 +509,9 @@ def print_thresholds(spe1,spe2,outDir,thresholds,all_proteins,thr_mode):
 			thr = calculate_threshold2(values)
 		elif thr_mode == "1stdv":
 			thr = calculate_threshold3(values)
-		elif thr_mode == "90_percent":
+		elif thr_mode == "90percent":
 			thr = calculate_threshold4(values)
-		elif thr_mode == "75_percent":
+		elif thr_mode == "75percent":
 			thr = calculate_threshold5(values)
 		elif thr_mode == "non_parametric":
 			thr = calculate_threshold6(values)
@@ -1170,7 +1170,7 @@ maxSize = args.maxSize
 set_difference = args.non_homologs
 if args.local:
 	print "STEP1: Create initial files"
-	cmd = "python "+args.pathEvolClust+" -i "+args.inFile+" -d "+args.outDir+" -f "+args.fastaFile+" --initial_files --path_evolclust "+args.pathEvolClust
+	cmd = "python "+args.pathEvolClust+" -i "+args.inFile+" -d "+args.outDir+" -f "+args.fastaFile+" --initial_files --path_evolclust "+args.pathEvolClust+" --threshold "+args.thr
 	run_command(cmd,False)
 	print "STEP2: Calculate thresholds and obtain pairwise clusters (This can take a long time)"
 	for line in open(args.outDir+"/jobs/jobs.step1.txt"):
@@ -1206,7 +1206,7 @@ if args.conv:
 	outDir = args.outDir+"/pairs_files/"
 	create_folder(outDir)
 	build_pairs(args.inFile,outDir)
-	jobsOutfileName = create_jobs(args.outDir,"initial")
+	jobsOutfileName = create_jobs(args.outDir,"initial",args.thr)
 
 #This script will obtain a list of clusters that have a higher conservation score than the cluster
 #RUN IN CLUSTER FOR PAIRS OF SPECIES
@@ -1235,6 +1235,7 @@ if args.filter_clusters:
 	#Load clusters
 	species = set([])
 	allClusters = {}
+	totalNumCl = 0
 	for dirName in glob.glob(path+"/*"):
 		spe = dirName.split("/")[-1]
 		clusters = set([])
@@ -1279,28 +1280,31 @@ if args.filter_clusters:
 			line = line.strip()
 			dades = line.split("\t")
 			allClusters[spe][dades[0]] = dades[1]
-
-	#Split clusters into files to process them in a cluster
-	pathAllClusters = args.outDir+"/complete_cluster_list.txt"
-	pathSpeClusters = args.outDir+"/clusters_by_spe/"
-	create_folder(pathSpeClusters)
-	outfile = open(pathAllClusters,"w")
-	for spe in allClusters:
-		numFile = 1
-		num = 0
-		for name in allClusters[spe]:
-			if num % 250 == 0:
-				if num != 0:
-					outfileSpe.close()
-				pathName = "%s/%s_%.5d" % (pathSpeClusters,spe,numFile)
-				numFile += 1
-				outfileSpe = open(pathName,"w")
-			num += 1
-			print >>outfile,name+"\t"+allClusters[spe][name]
-			print >>outfileSpe,name+"\t"+allClusters[spe][name]
-		outfileSpe.close()
-	outfile.close()
-	create_jobs(args.outDir,"comparison")
+			totalNumCl += 1
+	if totalNumCl == 0:
+		exit("No putative clusters were found in this dataset")
+	else:
+		#Split clusters into files to process them in a cluster
+		pathAllClusters = args.outDir+"/complete_cluster_list.txt"
+		pathSpeClusters = args.outDir+"/clusters_by_spe/"
+		create_folder(pathSpeClusters)
+		outfile = open(pathAllClusters,"w")
+		for spe in allClusters:
+			numFile = 1
+			num = 0
+			for name in allClusters[spe]:
+				if num % 250 == 0:
+					if num != 0:
+						outfileSpe.close()
+					pathName = "%s/%s_%.5d" % (pathSpeClusters,spe,numFile)
+					numFile += 1
+					outfileSpe = open(pathName,"w")
+				num += 1
+				print >>outfile,name+"\t"+allClusters[spe][name]
+				print >>outfileSpe,name+"\t"+allClusters[spe][name]
+			outfileSpe.close()
+		outfile.close()
+		create_jobs(args.outDir,"comparison",args.thr)
 
 #Make all the comparisons between the detected clusters	
 if args.cluster_comparison:
@@ -1402,7 +1406,7 @@ if args.clusterFam_complete:
 		species = set([x.split("_")[0] for x in cluster_families[cf]])
 		#Search for candidates suitable to add to the family.
 		candidates = get_candidates(cluster_families[cf],all_clusters,thresholds,maxSize,set_difference)
-		print candidates
+		#print candidates
 		#Join all the predictions from the different clusters
 		single_candidates = {}
 		for spe1 in candidates:
