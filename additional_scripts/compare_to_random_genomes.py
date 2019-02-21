@@ -349,7 +349,7 @@ def calculate_score(cluster1,cluster2,conversion):
 			score = 1.0
 	return score
 
-parser = argparse.ArgumentParser(description="Will perform the genome walking")
+parser = argparse.ArgumentParser(description="Will create random genomes and search clusters in there")
 parser.add_argument("-s","--species_tag",dest="speTAG",action="store",required=True,help="Species tag")
 parser.add_argument("-i","--clustersFile",dest="clustersFile",action="store",required=True,help="File with final clusters")
 parser.add_argument("-d","--inFolder",dest="inFolder",action="store",required=True,help="Folder where the analysis was run")
