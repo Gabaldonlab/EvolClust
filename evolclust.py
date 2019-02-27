@@ -235,6 +235,39 @@ def create_jobs(outDir,tagName,thrMode):
 	return outfileName
 
 ########################################################################
+# Check file presence
+########################################################################
+
+def check_files(folderName):
+	jobs = {}
+	for line in open(folderName+"/jobs/jobs.step1.txt"):
+		line = line.strip()
+		s1 = line.split("-s1 ")[1].split(" ")[0]
+		s2 = line.split("-s2 ")[1].split(" ")[0]
+		if s1 not in jobs:
+			jobs[s1] = {}
+		jobs[s1][s2] = line
+	species = [x.split("/")[-1] for x in glob.glob(folderName+"/pairs_files/*")]
+	ok = True
+	outfile = open(folderName+"/jobs/jobs.step1.missing.txt","w")
+	for a in range(0,len(species)):
+		fileName = folderName+"/clusters_from_pairs/"+species[a]+"/"
+		for b in range(0,len(species)):
+			if a != b:
+				fileName2 = fileName+species[b]+".txt"
+				if not os.path.exists(fileName2):
+					if species[a] in jobs:
+						print >>outfile,jobs[species[a]][species[b]]
+					elif species[b] in jobs:
+						print >>outfile,jobs[species[b]][species[a]]
+					else:
+						print "File "+fileName+" not found but jobs command also not found"
+					ok = False
+	if not ok:
+		exit("Some files are missing from the previous step, please check out the file "+folderName+"/jobs/jobs.step1.missing.txt")
+	
+
+########################################################################
 # Genome walking - Main script
 ########################################################################
 
@@ -481,10 +514,10 @@ def get_threshold_scores(cl1,cl2,conversion,thresholds,prot):
 						if score > current_score:
 							current_score = score
 			if prot in thresholds[s]:
-				if score > thresholds[s][prot]:
-					thresholds[s][prot] = score
+				if current_score > thresholds[s][prot]:
+					thresholds[s][prot] = current_score
 			else:
-				thresholds[s][prot] = score
+				thresholds[s][prot] = current_score
 	return thresholds
 
 #Summarize and print thresholds in a file for record keeping
@@ -1232,6 +1265,9 @@ if args.calc_scores_pairs:
 #NEEDS TO BE RUN AFTER ALL CLUSTERS HAVE BEEN CALCULATED
 if args.filter_clusters:
 	path = args.outDir+"/clusters_from_pairs/"
+	#Check that all files are present, else terminate the program and send a report of the missing files
+	if not args.local:
+		check_files(args.outDir)
 	#Load clusters
 	species = set([])
 	allClusters = {}
