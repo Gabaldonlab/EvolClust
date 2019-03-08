@@ -485,6 +485,8 @@ def get_clusters_and_thresholds(pairs,minSize,maxSize,conversion,set_difference,
 	outfile1.close()
 
 #Given two found clusters it obtains the values of the thresholds we're going to use
+#It will allways save the best score possible for a given protein, no matter how many homologs
+#it has.
 def get_threshold_scores(cl1,cl2,conversion,thresholds,prot):
 	size = len(cl1)
 	if size > maxSize:
