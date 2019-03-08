@@ -23,9 +23,11 @@ import os
 from random import randint
 import subprocess as sp
 import sys
-import rpy2
-import rpy2.robjects as robjects
-from rpy2.robjects.packages import importr
+
+#For non parametric tests uncomment this part
+#import rpy2
+#import rpy2.robjects as robjects
+#from rpy2.robjects.packages import importr
 
 
 ########################################################################
