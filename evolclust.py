@@ -1200,8 +1200,8 @@ args = parser.parse_args()
 
 #Create output folder if it doesn't exist
 create_folder(args.outDir)
-minSize = args.minSize
-maxSize = args.maxSize
+minSize = int(args.minSize)
+maxSize = int(args.maxSize)
 set_difference = args.non_homologs
 if args.local:
 	print "STEP1: Create initial files"
