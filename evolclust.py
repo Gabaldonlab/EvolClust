@@ -525,7 +525,7 @@ def print_thresholds(spe1,spe2,outDir,thresholds,all_proteins,thr_mode):
 	outDir = outDir+"/"+spe1
 	create_folder(outDir)
 	outfile = open(outDir+"/"+spe2+".txt","w")
-	print >>outfile,"Cluster_size\tAverage\tStandard_deviation\tThreshold"
+	print >>outfile,"Cluster_size\tThreshold"
 	sizes = thresholds.keys()
 	sizes.sort()
 	thresholds2 = {}
@@ -1460,3 +1460,6 @@ if args.clusterFam_complete:
 		for spe in cluster_families[cf]:
 			print >>outfile,spe+"\t"+";".join(cluster_families[cf][spe])
 	outfile.close()
+
+		
+
