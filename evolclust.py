@@ -23,11 +23,11 @@ import os
 from random import randint
 import subprocess as sp
 import sys
-
-#For non parametric tests uncomment this part
-#import rpy2
-#import rpy2.robjects as robjects
-#from rpy2.robjects.packages import importr
+from datetime import datetime
+startTime = datetime.now()
+# ~ import rpy2
+# ~ import rpy2.robjects as robjects
+# ~ from rpy2.robjects.packages import importr
 
 
 ########################################################################
@@ -111,12 +111,16 @@ def load_conversion(dirName,species):
 	
 #Load homologous pairs of proteins into memory
 def load_pairs(spe1,spe2,outDir):
-	pairs = []
-	for line in open(outDir+"/"+spe1+"/"+spe2+".txt"):
-		line = line.strip()
-		dades = line.split()
-		p = dades[2]+"-"+dades[3]
-		pairs.append(p)
+	fileName = outDir+"/"+spe1+"/"+spe2+".txt"
+	if os.path.exists(fileName):
+		pairs = []
+		for line in open(outDir+"/"+spe1+"/"+spe2+".txt"):
+			line = line.strip()
+			dades = line.split()
+			p = dades[2]+"-"+dades[3]
+			pairs.append(p)
+	else:
+		pairs = []
 	return pairs
 
 #~ #Load homologous pairs of proteins into memory
@@ -259,9 +263,11 @@ def check_files(folderName):
 				fileName2 = fileName+species[b]+".txt"
 				if not os.path.exists(fileName2):
 					if species[a] in jobs:
-						print >>outfile,jobs[species[a]][species[b]]
+						if species[b] in jobs[species[a]]:
+							print >>outfile,jobs[species[a]][species[b]]
 					elif species[b] in jobs:
-						print >>outfile,jobs[species[b]][species[a]]
+						if species[a] in jobs[species[b]]:
+							print >>outfile,jobs[species[b]][species[a]]
 					else:
 						print "File "+fileName+" not found but jobs command also not found"
 					ok = False
@@ -1190,9 +1196,8 @@ parser.add_argument("--threshold",dest="thr",action="store",choices=["2stdv","3s
 parser.add_argument("--build_jobs",dest="buildJobs",action="store_true",help="Will prepare the files so that trees can be build. Needs to have the -i and -d options as full paths")
 parser.add_argument("--initial_files",dest="conv",action="store_true",help="Will prompt the program to create the initial files")
 parser.add_argument("--get_pairwise_clusters",dest="calc_scores_pairs",action="store_true",help="Main program in the genome walking - starts from pairs files")
-parser.add_argument("--calculate_thresholds",dest="calc_thr",action="store_true",help="Will calculate the thresholds for each pair of species")
-parser.add_argument("--cluster_comparison",dest="cluster_comparison",action="store_true",help="Will compare clusters")
 parser.add_argument("--filter_clusters",dest="filter_clusters",action="store_true",help="Will filter out identical clusters and name them all; will also create the files needed to run the final cluster comparison")
+parser.add_argument("--cluster_comparison",dest="cluster_comparison",action="store_true",help="Will compare clusters")
 parser.add_argument("--filter_cluster_families",dest="clusterFam_filter",action="store_true",help="Will delete redundancy among clusters within cluster families")
 parser.add_argument("--complete_families",dest="clusterFam_complete",action="store_true",help="Will complete cluster families adding clusters for closely related species that were discarded.")
 parser.add_argument("--path_evolclust",dest="pathEvolClust",action="store",default="./evolclust.py",help="Path to the python program evolclust.py")
@@ -1205,6 +1210,7 @@ create_folder(args.outDir)
 minSize = int(args.minSize)
 maxSize = int(args.maxSize)
 set_difference = args.non_homologs
+noClusters = False
 if args.local:
 	print "STEP1: Create initial files"
 	cmd = "python "+args.pathEvolClust+" -i "+args.inFile+" -d "+args.outDir+" -f "+args.fastaFile+" --initial_files --path_evolclust "+args.pathEvolClust+" --threshold "+args.thr
@@ -1216,20 +1222,21 @@ if args.local:
 	print "STEP3: Filter paiwise clusters"
 	cmd = "python "+args.pathEvolClust+" -d "+args.outDir+" --filter_clusters"
 	run_command(cmd,False)
-	print "STEP4: All to all comparison of clusters"
-	cmd = "python "+args.pathEvolClust+" -d "+args.outDir+" -i "+args.outDir+"/complete_cluster_list.txt --cluster_comparison"
-	run_command(cmd,False)
-	print "STEP5: Put clusters into families (uses mcl)"
-	cmd = args.pathMCL+" "+args.outDir+"/cluster_comparison/complete_cluster_list.txt --abc"
-	run_command(cmd,False)
-	cmd = "mv out.complete_cluster_list.txt.I20 "+args.outDir+"/complete_comparison.mcl"
-	run_command(cmd,False)
-	print "STEP6: Clean cluster families"
-	cmd = "python "+args.pathEvolClust+" -d "+args.outDir+" -i "+args.outDir+"/complete_comparison.mcl --filter_cluster_families"
-	run_command(cmd,False)
-	print "STEP7: Complete cluster families"
-	cmd = "python "+args.pathEvolClust+" -d "+args.outDir+" -i "+args.outDir+"/final_clusters.txt --complete_families"
-	run_command(cmd,False)
+	if not noClusters:
+		print "STEP4: All to all comparison of clusters"
+		cmd = "python "+args.pathEvolClust+" -d "+args.outDir+" -i "+args.outDir+"/complete_cluster_list.txt --cluster_comparison"
+		run_command(cmd,False)
+		print "STEP5: Put clusters into families (uses mcl)"
+		cmd = args.pathMCL+" "+args.outDir+"/cluster_comparison/complete_cluster_list.txt --abc"
+		run_command(cmd,False)
+		cmd = "mv out.complete_cluster_list.txt.I20 "+args.outDir+"/complete_comparison.mcl"
+		run_command(cmd,False)
+		print "STEP6: Clean cluster families"
+		cmd = "python "+args.pathEvolClust+" -d "+args.outDir+" -i "+args.outDir+"/complete_comparison.mcl --filter_cluster_families"
+		run_command(cmd,False)
+		print "STEP7: Complete cluster families"
+		cmd = "python "+args.pathEvolClust+" -d "+args.outDir+" -i "+args.outDir+"/final_clusters.txt --complete_families"
+		run_command(cmd,False)
 
 #Creates conversion files that will correlate each protein to the corresponding protein family
 #RUNS FOR ALL DATA - Checked
@@ -1264,6 +1271,7 @@ if args.calc_scores_pairs:
 		except:
 			exit("For this threshold mode you need to install the R-package tolerance: https://cran.r-project.org/web/packages/tolerance/tolerance.pdf")
 	get_clusters_and_thresholds(pairs,minSize,maxSize,conversion,set_difference,args.thr)
+		
 
 #This will create a single list with all the clusters found. For each species it performs a mcl to remove redundancy and then creates a unique list
 #NEEDS TO BE RUN AFTER ALL CLUSTERS HAVE BEEN CALCULATED
@@ -1322,6 +1330,7 @@ if args.filter_clusters:
 			allClusters[spe][dades[0]] = dades[1]
 			totalNumCl += 1
 	if totalNumCl == 0:
+		noClusters = True
 		exit("No putative clusters were found in this dataset")
 	else:
 		#Split clusters into files to process them in a cluster
@@ -1332,17 +1341,18 @@ if args.filter_clusters:
 		for spe in allClusters:
 			numFile = 1
 			num = 0
-			for name in allClusters[spe]:
-				if num % 250 == 0:
-					if num != 0:
-						outfileSpe.close()
-					pathName = "%s/%s_%.5d" % (pathSpeClusters,spe,numFile)
-					numFile += 1
-					outfileSpe = open(pathName,"w")
-				num += 1
-				print >>outfile,name+"\t"+allClusters[spe][name]
-				print >>outfileSpe,name+"\t"+allClusters[spe][name]
-			outfileSpe.close()
+			if len(allClusters[spe]) != 0:
+				for name in allClusters[spe]:
+					if num % 250 == 0:
+						if num != 0:
+							outfileSpe.close()
+						pathName = "%s/%s_%.5d" % (pathSpeClusters,spe,numFile)
+						numFile += 1
+						outfileSpe = open(pathName,"w")
+					num += 1
+					print >>outfile,name+"\t"+allClusters[spe][name]
+					print >>outfileSpe,name+"\t"+allClusters[spe][name]
+				outfileSpe.close()
 		outfile.close()
 		create_jobs(args.outDir,"comparison",args.thr)
 
@@ -1465,5 +1475,43 @@ if args.clusterFam_complete:
 			print >>outfile,spe+"\t"+";".join(cluster_families[cf][spe])
 	outfile.close()
 
-		
+
+if args.conv:
+	outfile = open(args.outDir+"/running_time_step1.txt","w")
+	timing = datetime.now() - startTime
+	print >>outfile,timing
+	outfile.close()
+
+if args.calc_scores_pairs:
+	create_folder(args.outDir+"/all_running_times_step2/")
+	create_folder(args.outDir+"/all_running_times_step2/"+args.species1+"/")
+	outfile = open(args.outDir+"/all_running_times_step2/"+args.species1+"/"+args.species2+".txt","w")
+	timing = datetime.now() - startTime
+	print >>outfile,timing
+	outfile.close()
+
+if args.filter_clusters:
+	outfile = open(args.outDir+"/running_time_step3.txt","w")
+	timing = datetime.now() - startTime
+	print >>outfile,timing
+	outfile.close()
+
+if args.cluster_comparison:
+	create_folder(args.outDir+"/all_running_times_step4/")
+	outfile = open(args.outDir+"/all_running_times_step4/"+args.inFile.split("/")[-1]+".txt","w")
+	timing = datetime.now() - startTime
+	print >>outfile,timing
+	outfile.close()
+
+if args.clusterFam_filter:
+	outfile = open(args.outDir+"/running_time_step6.txt","w")
+	timing = datetime.now() - startTime
+	print >>outfile,timing
+	outfile.close()
+
+if args.clusterFam_complete:
+	outfile = open(args.outDir+"/running_time_step7.txt","w")
+	timing = datetime.now() - startTime
+	print >>outfile,timing
+	outfile.close()
 
