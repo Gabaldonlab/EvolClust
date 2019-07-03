@@ -21,14 +21,12 @@ import glob
 import numpy
 import os
 from random import randint
+from random import shuffle
 import subprocess as sp
 import sys
 from datetime import datetime
+import itertools
 startTime = datetime.now()
-# ~ import rpy2
-# ~ import rpy2.robjects as robjects
-# ~ from rpy2.robjects.packages import importr
-
 
 ########################################################################
 # Operational modules
@@ -40,7 +38,6 @@ def create_folder(name):
 		cmd = "mkdir "+name
 		try:
 			run_command(cmd,False)
-			# ~ print "Created Folder"
 		except:
 			print "Unable to create directory ",name
 
@@ -98,7 +95,6 @@ def load_conversion(dirName,species):
 	conversion = {}
 	for code in species:
 		fileName = dirName+"/"+code+".txt"
-		#~ code = fileName.split("/")[-1].split(".")[0]
 		conversion[code] = {}
 		for line in open(fileName):
 			line = line.strip()
@@ -122,22 +118,6 @@ def load_pairs(spe1,spe2,outDir):
 	else:
 		pairs = []
 	return pairs
-
-#~ #Load homologous pairs of proteins into memory
-#~ def load_pairs_by_protein(spe1,spe2,outDir):
-	#~ pairs = {}
-	#~ for line in open(outDir+"/"+spe1+"/"+spe2+".txt"):
-		#~ line = line.strip()
-		#~ dades = line.split()
-		#~ p1 = dades[2]
-		#~ p2 = dades[3]
-		#~ if p1 not in pairs:
-			#~ pairs[p1] = []
-		#~ pairs[p1].append(p2)
-		#~ if p2 not in pairs:
-			#~ pairs[p2] = []
-		#~ pairs[p2].append(p1)
-	#~ return pairs
 
 ########################################################################
 #Build files
@@ -1065,7 +1045,7 @@ def get_all_clusters(inDir,species,protsCL):
 	return clusters
 
 #Select candidates to add to the cluster family
-def get_candidates(cf,all_clusters,thresholds,maxSize,set_difference):
+def get_candidates(cf,all_clusters,thresholds,maxSize,set_difference,conversion):
 	species_included = set([x.split("_")[0] for x in cf])
 	candidates = {}
 	for spe in cf:
@@ -1105,6 +1085,7 @@ def get_candidates(cf,all_clusters,thresholds,maxSize,set_difference):
 
 
 def compare_clusters(cl1,cl2,conversion,set_difference):
+	score = None
 	spe1,contig1 = list(cl1)[0].split("_")[0],list(cl1)[0].split("_")[1]
 	#Sort them
 	cluster1 = sorted(list(cl1),key=lambda x: int(x.split("_")[2]))
@@ -1183,23 +1164,226 @@ def fuse_clusters(group,protsCL):
 		cl = None
 	return cl
 
+#Builds cluster families from the MCL clustering. Filters families and fishes back from previously discarded families.
+def build_cluster_families(infile):
+	filter_initial_families(infile)
+	inDirThr,inDirCL,species = recopilate_threshold_data()
+	obtain_discarded_clusters(inDirThr,inDirCL,species)
+
+#Filter the initial families	
+def filter_initial_families(infile):
+	clusterFams = load_cluster_families(infile)
+	pathAllClusters = args.outDir+"/complete_cluster_list.txt"
+	clusters,species = load_clusters(pathAllClusters)
+	conversion = load_conversion(args.outDir+"/conversion_files/",species)
+	total = len(clusterFams)
+	num = 1
+	#Open outfile
+	outfile = open(args.outDir+"/cluster_families.txt","w")
+	for fam in clusterFams:
+		num +=1
+		if num % 1000 == 0:
+			print num,total
+		#Delete outliers
+		filteredFam = delete_outliers(clusterFams[fam],clusters)
+		families = divide_overlaps(filteredFam,clusters)
+		counter = {}
+		#Counts how many species have a given protein family
+		for spe in families:
+			for cl in families[spe]:
+				proteins = clusters[cl]
+				for pr in proteins:
+					contig = pr.split("_")[1]
+					speName = pr.split("_")[0]
+					if pr in conversion[speName][contig]:
+						f = conversion[speName][contig][pr]
+						if f not in counter:
+							counter[f] = {}
+						if spe not in counter[f]:
+							counter[f][spe] = set([])
+						counter[f][spe].add(pr)
+		#The threshold determines that proteins need to be in at least 1/3 of the species in order to be kept
+		thr = round(float(len(clusterFams[fam]))*0.33,0)
+		new_clusters = {}
+		for f in counter:
+			if float(len(counter[f])) > thr:
+				for spe in counter[f]:
+					if spe not in new_clusters:
+						new_clusters[spe] = []
+					for code in counter[f][spe]:
+						new_clusters[spe].append(code)
+		#Complete cluster and delete clusters that are formed only by duplicated genes
+		nearly_last = []
+		for spe in new_clusters:
+			cl = new_clusters[spe]
+			cl = sorted(cl,key=lambda x: int(x.split("_")[2]))
+			PASS = delete_multiple_duplications(spe,cl,conversion[spe.split("_")[0]])
+			if PASS:
+				cl = complete_cluster(cl)
+				string = spe+"\t"+";".join(cl)
+				nearly_last.append(string)
+		#Print clusters that are found in at least two species
+		if len(nearly_last) > 1:
+			print >>outfile,"# "+fam
+			for string in nearly_last:
+				print >>outfile,string
+	outfile.close()
+
+#Puts all the threshold information into a single file for easier access
+def recopilate_threshold_data():
+	#First step is to compile all the information from the clusters previously predicted
+	print "Compiling information, this can take a few hours depending on the amount of data you have"
+	inDirThr = args.outDir+"/thresholds/"
+	inDirCL = args.outDir+"/all_cluster_predictions/"
+	species = [x.split("/")[-1] for x in glob.glob(inDirCL+"/*") if ".txt" not in x]
+	species = compile_info(inDirCL,inDirThr)
+	return inDirThr,inDirCL,species
+
+#Gets clusters that were initially discarded due to high gene conservation background
+def obtain_discarded_clusters(inDirThr,inDirCL,species):
+	#Load the clusters into memory
+	cluster_families,protsCL = load_cluster_families2(args.outDir+"/cluster_families.txt")
+	#Load the thresholds into memory
+	thresholds = load_thresholds(inDirThr+"/all_thresholds.txt")
+	#Open the outfile
+	outfile = open(args.outDir+"/cluster_families.complemented.txt","w")
+	#Load conversion information
+	conversion = load_conversion(args.outDir+"/conversion_files/",species)
+	#Load all previously predicted clusters into memory as long as they overlap less than 10% with the current cluster collection
+	all_clusters = get_all_clusters(inDirCL,species,protsCL)
+	for cf in cluster_families.keys():
+		print >>outfile,"# "+cf
+		species = set([x.split("_")[0] for x in cluster_families[cf]])
+		#Search for candidates suitable to add to the family.
+		candidates = get_candidates(cluster_families[cf],all_clusters,thresholds,maxSize,set_difference,conversion)
+		#print candidates
+		#Join all the predictions from the different clusters
+		single_candidates = {}
+		for spe1 in candidates:
+			for spe2 in candidates[spe1]:
+				cl = ";".join(candidates[spe1][spe2][0])
+				if spe2 not in single_candidates:
+					single_candidates[spe2] = set([])
+				single_candidates[spe2].add(cl)
+		#Fuse them together
+		for spe in single_candidates:
+			group = single_candidates[spe]
+			group = fuse_clusters(group,protsCL)
+			if group:
+				print >>outfile,spe+"\t"+group
+		for spe in cluster_families[cf]:
+			print >>outfile,spe+"\t"+";".join(cluster_families[cf][spe])
+	outfile.close()
+	
+#For each cluster family it calculates the average CS score and the difference between the score and the thresholds
+def calculate_threshold_distance(cluster_families,thresholds,conversion):
+	all_values = {}
+	for fam in cluster_families:
+		delta_values = []
+		species = cluster_families[fam].keys()
+		for a in range(0,len(species)):
+			clA = cluster_families[fam][species[a]]
+			for b in range(a+1,len(species)):
+				clB = cluster_families[fam][species[b]]
+				clusterA,scoreA = compare_clusters(clA,clB,conversion,set_difference)
+				clusterB,scoreB = compare_clusters(clB,clA,conversion,set_difference)
+				speA = species[a].split("_")[0]
+				speB = species[b].split("_")[0]
+				thrA = thresholds[speA][speB][len(clA)]
+				thrB = thresholds[speB][speA][len(clB)]
+				if scoreA < thrA:
+					scoreA = thrA
+				if scoreB < thrB:
+					scoreB = thrB
+				diff = (abs(thrA - scoreA) + abs(thrB - scoreB)) / 2.0
+				delta_values.append(diff)
+		all_values[fam] = [numpy.average(delta_values),numpy.std(delta_values)]
+	return all_values
+
+#For each cluster family it calculates the average CS score and the difference between the score and the thresholds
+def calculate_valid_clusters(cluster_families,thresholds,conversion):
+	valid_clusters = {}
+	for fam in cluster_families:
+		species = cluster_families[fam].keys()
+		for a in range(0,len(species)):
+			clA = cluster_families[fam][species[a]]
+			for b in range(a+1,len(species)):
+				clB = cluster_families[fam][species[b]]
+				clusterA,scoreA = compare_clusters(clA,clB,conversion,set_difference)
+				clusterB,scoreB = compare_clusters(clB,clA,conversion,set_difference)
+				# ~ if scoreA or scoreB:
+				speA = species[a].split("_")[0]
+				speB = species[b].split("_")[0]
+				if speA == speB:
+					thrA = 1.0
+					thrB = 1.0
+				else:
+					thrA = thresholds[speA][speB][len(clA)]
+					thrB = thresholds[speB][speA][len(clB)]
+				print scoreA,scoreB,thrA,thrB,clA,clB
+				exit()
+				if scoreA < thrA:
+					scoreA = thrA
+				if scoreB < thrB:
+					scoreB = thrB
+				diff = (abs(thrA - scoreA) + abs(thrB - scoreB)) / 2.0
+	return all_values
+
+#Create a 100 random genomes from each of the species considered
+def randomize_genomes(conversion):
+	random_genomes = {}
+	conv = simplify_conversion(conversion)	
+	for n in range(0,100):
+		random_genomes[n] = {}
+		for spe in conv:
+			genes = conv[spe].keys()
+			values = conv[spe].values()
+			random_genomes[n][spe] = {}
+			shuffle(values)
+			for a in range(0,len(genes)):
+				contig = genes[a].split("_")[1]
+				if contig not in random_genomes[n][spe]:
+					random_genomes[n][spe][contig] = {}
+				random_genomes[n][spe][contig][genes[a]] = values[a]
+	return random_genomes
+
+#Deletes the contig key in the conversion
+def simplify_conversion(conversion):
+	conv = {}
+	for spe in conversion:
+		conv[spe] = {}
+		for contig in conversion[spe]:
+			for prot in conversion[spe][contig]:
+				conv[spe][prot] = conversion[spe][contig][prot]
+	return conv
+
+#Searches whether clusters are found in random genomes
+def search_clusters_in_random_genomes(randomized_genomes,cluster_families,thresholds):
+	found_clusters = {}
+	for num in randomized_genomes:
+		conversion = randomized_genomes[num]
+		print conversion.keys()
+		calculate_valid_clusters(cluster_families,thresholds,conversion)
+		
+
 parser = argparse.ArgumentParser(description="Will perform the genome walking")
-parser.add_argument("-i","--infile",dest="inFile",action="store",default=None,help="mcl or pairs file, can hold multiple or single families.")
+parser.add_argument("-i","--infile",dest="inFile",action="store",default=None,help="Input file. Can change depending on the analysis run")
 parser.add_argument("-f","--fastafile",dest="fastaFile",action="store",default=None,help="Fasta file that contains the complete proteome database.")
+parser.add_argument("-l","--listfile",dest="listFile",action="store",default=None,help="Complete list of proteins.")
 parser.add_argument("-s1","--species1",dest="species1",action="store",default=None,help="Species tag needed to run the threshold calculation")
 parser.add_argument("-s2","--species2",dest="species2",action="store",default=None,help="Species tag needed to run the threshold calculation")
 parser.add_argument("-d","--outdir",dest="outDir",action="store",default="./genome_walking/",help="basepath folder where the results will be stored")
 parser.add_argument("--minSize",dest="minSize",action="store",default=5,help="Minimum size a cluster needs to have to be considered. Default is set to 5")
 parser.add_argument("--maxSize",dest="maxSize",action="store",default=35,help="Maximum size a cluster needs to have to be considered. Default is set to 35")
+parser.add_argument("--minHomologs",dest="minHomo",action="store",default=4,help="Minimum ammount of homologous genes present to consider a cluster as valid")
 parser.add_argument("--non_homologs",dest="non_homologs",action="store",default=3,help="Number of non-homologous genes needed to split a cluster")
-parser.add_argument("--threshold",dest="thr",action="store",choices=["2stdv","3stdv","1stdv","90percent","75percent","non_parametric"],default="2stdv",help="Way to calculate the thresholds to accept a conserved region as cluster")
-parser.add_argument("--build_jobs",dest="buildJobs",action="store_true",help="Will prepare the files so that trees can be build. Needs to have the -i and -d options as full paths")
+parser.add_argument("--threshold",dest="thr",action="store",choices=["2stdv","3stdv","1stdv","90percent","75percent"],default="2stdv",help="Way to calculate the thresholds to accept a conserved region as cluster")
 parser.add_argument("--initial_files",dest="conv",action="store_true",help="Will prompt the program to create the initial files")
 parser.add_argument("--get_pairwise_clusters",dest="calc_scores_pairs",action="store_true",help="Main program in the genome walking - starts from pairs files")
 parser.add_argument("--filter_clusters",dest="filter_clusters",action="store_true",help="Will filter out identical clusters and name them all; will also create the files needed to run the final cluster comparison")
 parser.add_argument("--cluster_comparison",dest="cluster_comparison",action="store_true",help="Will compare clusters")
-parser.add_argument("--filter_cluster_families",dest="clusterFam_filter",action="store_true",help="Will delete redundancy among clusters within cluster families")
-parser.add_argument("--complete_families",dest="clusterFam_complete",action="store_true",help="Will complete cluster families adding clusters for closely related species that were discarded.")
+parser.add_argument("--cluster_families",dest="create_cluster_family",action="store_true",help="Builds the cluster families")
+parser.add_argument("--statistics",dest="stats",action="store_true",help="Will calculate statistics for each cluster family.")
 parser.add_argument("--path_evolclust",dest="pathEvolClust",action="store",default="./evolclust.py",help="Path to the python program evolclust.py")
 parser.add_argument("--path_mcl",dest="pathMCL",action="store",default="mcl",help="Path to mcl")
 parser.add_argument("--local",dest="local",action="store_true",help="This will run the whole evolclust pipeline without splitting it in steps. It is only recommended for small datasets")
@@ -1213,7 +1397,10 @@ set_difference = args.non_homologs
 noClusters = False
 if args.local:
 	print "STEP1: Create initial files"
-	cmd = "python "+args.pathEvolClust+" -i "+args.inFile+" -d "+args.outDir+" -f "+args.fastaFile+" --initial_files --path_evolclust "+args.pathEvolClust+" --threshold "+args.thr
+	if args.fastaFile:
+		cmd = "python "+args.pathEvolClust+" -i "+args.inFile+" -d "+args.outDir+" -f "+args.fastaFile+" --initial_files --path_evolclust "+args.pathEvolClust+" --threshold "+args.thr
+	elif args.listFile:
+		cmd = "python "+args.pathEvolClust+" -i "+args.inFile+" -d "+args.outDir+" -l "+args.listFile+" --initial_files --path_evolclust "+args.pathEvolClust+" --threshold "+args.thr
 	run_command(cmd,False)
 	print "STEP2: Calculate thresholds and obtain pairwise clusters (This can take a long time)"
 	for line in open(args.outDir+"/jobs/jobs.step1.txt"):
@@ -1227,15 +1414,7 @@ if args.local:
 		cmd = "python "+args.pathEvolClust+" -d "+args.outDir+" -i "+args.outDir+"/complete_cluster_list.txt --cluster_comparison"
 		run_command(cmd,False)
 		print "STEP5: Put clusters into families (uses mcl)"
-		cmd = args.pathMCL+" "+args.outDir+"/cluster_comparison/complete_cluster_list.txt --abc"
-		run_command(cmd,False)
-		cmd = "mv out.complete_cluster_list.txt.I20 "+args.outDir+"/complete_comparison.mcl"
-		run_command(cmd,False)
-		print "STEP6: Clean cluster families"
-		cmd = "python "+args.pathEvolClust+" -d "+args.outDir+" -i "+args.outDir+"/complete_comparison.mcl --filter_cluster_families"
-		run_command(cmd,False)
-		print "STEP7: Complete cluster families"
-		cmd = "python "+args.pathEvolClust+" -d "+args.outDir+" -i "+args.outDir+"/final_clusters.txt --complete_families"
+		cmd = "python "+args.pathEvolClust+" -d "+args.outDir+" --cluster_families"
 		run_command(cmd,False)
 
 #Creates conversion files that will correlate each protein to the corresponding protein family
@@ -1245,7 +1424,13 @@ if args.conv:
 	create_folder(outDir)
 	build_conversion_files(args.inFile,outDir)
 	outfileName = args.outDir+"/complete_protein_list.txt"
-	build_complete_protein_list(args.fastaFile,outfileName)
+	if args.fastaFile:
+		build_complete_protein_list(args.fastaFile,outfileName)
+	elif args.listFile:
+		cmd = "cp "+args.listFile+" "+outfileName
+		run_command(cmd,False)
+	else:
+		exit("Either a fasta file (-f) or a list of codes (-l) needs to be provided")
 	#Creates files where all the pairs of homologous proteins between two species according to the mcl can be found
 	outDir = args.outDir+"/pairs_files/"
 	create_folder(outDir)
@@ -1370,148 +1555,59 @@ if args.cluster_comparison:
 	calculate_partial_scores(refSpeClusters,refAllClusters,conversion,pathOutFile)
 
 #After this is complete a mcl needs to be run in order to cluster the clusters.
+if args.create_cluster_family:
+	cmd = "cat "+args.outDir+"/cluster_comparison/* >"+args.outDir+"/all_cluster_comparisons.txt"
+	run_command(cmd,False)
+	cmd = "mcl "+args.outDir+"/all_cluster_comparisons.txt --abc -o "+args.outDir+"/mcl_comparison_clusters.txt"
+	run_command(cmd,False)
+	build_cluster_families(args.outDir+"/mcl_comparison_clusters.txt")
 
-#Filter results and create the final list of cluster families
-if args.clusterFam_filter:
-	#Load data into memory
-	clusterFams = load_cluster_families(args.inFile)
-	pathAllClusters = args.outDir+"/complete_cluster_list.txt"
-	clusters,species = load_clusters(pathAllClusters)
-	conversion = load_conversion(args.outDir+"/conversion_files/",species)
-	total = len(clusterFams)
-	num = 1
-	#Open outfile
-	outfile = open(args.outDir+"/final_clusters.txt","w")
-	for fam in clusterFams:
-		num +=1
-		if num % 1000 == 0:
-			print num,total
-		#Delete outliers
-		filteredFam = delete_outliers(clusterFams[fam],clusters)
-		families = divide_overlaps(filteredFam,clusters)
-		counter = {}
-		#Counts how many species have a given protein family
-		for spe in families:
-			for cl in families[spe]:
-				proteins = clusters[cl]
-				for pr in proteins:
-					contig = pr.split("_")[1]
-					speName = pr.split("_")[0]
-					if pr in conversion[speName][contig]:
-						f = conversion[speName][contig][pr]
-						if f not in counter:
-							counter[f] = {}
-						if spe not in counter[f]:
-							counter[f][spe] = set([])
-						counter[f][spe].add(pr)
-		#The threshold determines that proteins need to be in at least 1/3 of the species in order to be kept
-		thr = round(float(len(clusterFams[fam]))*0.33,0)
-		new_clusters = {}
-		for f in counter:
-			if float(len(counter[f])) > thr:
-				for spe in counter[f]:
-					if spe not in new_clusters:
-						new_clusters[spe] = []
-					for code in counter[f][spe]:
-						new_clusters[spe].append(code)
-		#Complete cluster and delete clusters that are formed only by duplicated genes
-		nearly_last = []
-		for spe in new_clusters:
-			cl = new_clusters[spe]
-			cl = sorted(cl,key=lambda x: int(x.split("_")[2]))
-			PASS = delete_multiple_duplications(spe,cl,conversion[spe.split("_")[0]])
-			if PASS:
-				cl = complete_cluster(cl)
-				string = spe+"\t"+";".join(cl)
-				nearly_last.append(string)
-		#Print clusters that are found in at least two species
-		if len(nearly_last) > 1:
-			print >>outfile,"# "+fam
-			for string in nearly_last:
-				print >>outfile,string
-	outfile.close()
-
-#Completes cluster families with clusters that have been previously discarded
-
-if args.clusterFam_complete:
-	#First step is to compile all the information from the clusters previously predicted
-	print "Compiling information, this can take a few hours depending on the amount of data you have"
-	inDirThr = args.outDir+"/thresholds/"
-	inDirCL = args.outDir+"/all_cluster_predictions/"
-	species = [x.split("/")[-1] for x in glob.glob(inDirCL+"/*") if ".txt" not in x]
-	species = compile_info(inDirCL,inDirThr)
-
-	#Load the clusters into memory
+#Calculates statistics for clusters
+if args.stats:
 	cluster_families,protsCL = load_cluster_families2(args.inFile)
-	#Load the thresholds into memory
-	thresholds = load_thresholds(inDirThr+"/all_thresholds.txt")
-	#Open the outfile
-	outfile = open(args.outDir+"/final_clusters.complemented.txt","w")
-	#Load conversion information
+	species = set([x.split("_")[0] for x in protsCL])
 	conversion = load_conversion(args.outDir+"/conversion_files/",species)
-	#Load all previously predicted clusters into memory as long as they overlap less than 10% with the current cluster collection
-	all_clusters = get_all_clusters(inDirCL,species,protsCL)
-	for cf in cluster_families.keys():
-		print >>outfile,"# "+cf
-		species = set([x.split("_")[0] for x in cluster_families[cf]])
-		#Search for candidates suitable to add to the family.
-		candidates = get_candidates(cluster_families[cf],all_clusters,thresholds,maxSize,set_difference)
-		#print candidates
-		#Join all the predictions from the different clusters
-		single_candidates = {}
-		for spe1 in candidates:
-			for spe2 in candidates[spe1]:
-				cl = ";".join(candidates[spe1][spe2][0])
-				if spe2 not in single_candidates:
-					single_candidates[spe2] = set([])
-				single_candidates[spe2].add(cl)
-		#Fuse them together
-		for spe in single_candidates:
-			group = single_candidates[spe]
-			group = fuse_clusters(group,protsCL)
-			if group:
-				print >>outfile,spe+"\t"+group
-		for spe in cluster_families[cf]:
-			print >>outfile,spe+"\t"+";".join(cluster_families[cf][spe])
-	outfile.close()
+	inDirThr = args.outDir+"/thresholds/"
+	thresholds = load_thresholds(inDirThr+"/all_thresholds.txt")
+	# ~ all_values = calculate_threshold_distance(cluster_families,thresholds,conversion)
+	randomized_genomes = randomize_genomes(conversion)
+	search_clusters_in_random_genomes(randomized_genomes,cluster_families,thresholds)
 
-
+#Modules used to calculate running times
 if args.conv:
-	outfile = open(args.outDir+"/running_time_step1.txt","w")
+	create_folder(args.outDir+"/timming/")
+	outfile = open(args.outDir+"/timming/running_time_step1.txt","w")
 	timing = datetime.now() - startTime
 	print >>outfile,timing
 	outfile.close()
 
 if args.calc_scores_pairs:
-	create_folder(args.outDir+"/all_running_times_step2/")
-	create_folder(args.outDir+"/all_running_times_step2/"+args.species1+"/")
-	outfile = open(args.outDir+"/all_running_times_step2/"+args.species1+"/"+args.species2+".txt","w")
+	create_folder(args.outDir+"/timming/")
+	create_folder(args.outDir+"/timming/all_running_times_step2/")
+	create_folder(args.outDir+"/timming/all_running_times_step2/"+args.species1+"/")
+	outfile = open(args.outDir+"/timming/all_running_times_step2/"+args.species1+"/"+args.species2+".txt","w")
 	timing = datetime.now() - startTime
 	print >>outfile,timing
 	outfile.close()
 
 if args.filter_clusters:
-	outfile = open(args.outDir+"/running_time_step3.txt","w")
+	create_folder(args.outDir+"/timming/")
+	outfile = open(args.outDir+"/timming/running_time_step3.txt","w")
 	timing = datetime.now() - startTime
 	print >>outfile,timing
 	outfile.close()
 
 if args.cluster_comparison:
-	create_folder(args.outDir+"/all_running_times_step4/")
-	outfile = open(args.outDir+"/all_running_times_step4/"+args.inFile.split("/")[-1]+".txt","w")
+	create_folder(args.outDir+"/timming/")
+	create_folder(args.outDir+"/timming/all_running_times_step4/")
+	outfile = open(args.outDir+"/timming/all_running_times_step4/"+args.inFile.split("/")[-1]+".txt","w")
 	timing = datetime.now() - startTime
 	print >>outfile,timing
 	outfile.close()
 
-if args.clusterFam_filter:
-	outfile = open(args.outDir+"/running_time_step6.txt","w")
+if args.create_cluster_family:
+	create_folder(args.outDir+"/timming/")
+	outfile = open(args.outDir+"/timming/running_time_step5.txt","w")
 	timing = datetime.now() - startTime
 	print >>outfile,timing
 	outfile.close()
-
-if args.clusterFam_complete:
-	outfile = open(args.outDir+"/running_time_step7.txt","w")
-	timing = datetime.now() - startTime
-	print >>outfile,timing
-	outfile.close()
-
