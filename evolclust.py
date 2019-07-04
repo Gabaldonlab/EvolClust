@@ -1220,8 +1220,9 @@ def filter_initial_families(infile):
 			PASS = delete_multiple_duplications(spe,cl,conversion[spe.split("_")[0]])
 			if PASS:
 				cl = complete_cluster(cl)
-				string = spe+"\t"+";".join(cl)
-				nearly_last.append(string)
+				if len(cl) > minSize:
+					string = spe+"\t"+";".join(cl)
+					nearly_last.append(string)
 		#Print clusters that are found in at least two species
 		if len(nearly_last) > 1:
 			print >>outfile,"# "+fam
@@ -1289,8 +1290,22 @@ def calculate_threshold_distance(cluster_families,thresholds,conversion):
 				clusterB,scoreB = compare_clusters(clB,clA,conversion,set_difference)
 				speA = species[a].split("_")[0]
 				speB = species[b].split("_")[0]
-				thrA = thresholds[speA][speB][len(clA)]
-				thrB = thresholds[speB][speA][len(clB)]
+				if speA == speB:
+					thrA = 1.0
+					thrB = 1.0
+				else:
+					numA = len(clA)
+					numB = len(clB)
+					if len(clA) > maxSize:
+						numA = maxSize
+					elif len(clA) < minSize:
+						numA = minSize
+					if len(clB) > maxSize:
+						numB = maxSize
+					elif len(clB) < minSize:
+						numB = minSize
+					thrA = thresholds[speA][speB][numA]
+					thrB = thresholds[speB][speA][numB]
 				if scoreA < thrA:
 					scoreA = thrA
 				if scoreB < thrB:
@@ -1318,33 +1333,43 @@ def calculate_valid_clusters(cluster_families,thresholds,conversion):
 					thrA = 1.0
 					thrB = 1.0
 				else:
-					thrA = thresholds[speA][speB][len(clA)]
-					thrB = thresholds[speB][speA][len(clB)]
-				print scoreA,scoreB,thrA,thrB,clA,clB
-				exit()
-				if scoreA < thrA:
-					scoreA = thrA
-				if scoreB < thrB:
-					scoreB = thrB
-				diff = (abs(thrA - scoreA) + abs(thrB - scoreB)) / 2.0
-	return all_values
+					numA = len(clA)
+					numB = len(clB)
+					if len(clA) > maxSize:
+						numA = maxSize
+					elif len(clA) < minSize:
+						numA = minSize
+					if len(clB) > maxSize:
+						numB = maxSize
+					elif len(clB) < minSize:
+						numB = minSize
+					thrA = thresholds[speA][speB][numA]
+					thrB = thresholds[speB][speA][numB]
+				if scoreA:
+					if scoreA > thrA:
+						if fam not in valid_clusters:
+							valid_clusters[fam] = set([])
+						valid_clusters[fam].add(species[a])
+				if scoreB:
+					if scoreB > thrB:
+						if fam not in valid_clusters:
+							valid_clusters[fam] = set([])
+						valid_clusters[fam].add(species[b])	
+	return valid_clusters
 
 #Create a 100 random genomes from each of the species considered
-def randomize_genomes(conversion):
+def randomize_genomes(conv):
 	random_genomes = {}
-	conv = simplify_conversion(conversion)	
-	for n in range(0,100):
-		random_genomes[n] = {}
-		for spe in conv:
-			genes = conv[spe].keys()
-			values = conv[spe].values()
-			random_genomes[n][spe] = {}
-			shuffle(values)
-			for a in range(0,len(genes)):
-				contig = genes[a].split("_")[1]
-				if contig not in random_genomes[n][spe]:
-					random_genomes[n][spe][contig] = {}
-				random_genomes[n][spe][contig][genes[a]] = values[a]
+	for spe in conv:
+		genes = conv[spe].keys()
+		values = conv[spe].values()
+		random_genomes[spe] = {}
+		shuffle(values)
+		for a in range(0,len(genes)):
+			contig = genes[a].split("_")[1]
+			if contig not in random_genomes[spe]:
+				random_genomes[spe][contig] = {}
+			random_genomes[spe][contig][genes[a]] = values[a]
 	return random_genomes
 
 #Deletes the contig key in the conversion
@@ -1358,13 +1383,35 @@ def simplify_conversion(conversion):
 	return conv
 
 #Searches whether clusters are found in random genomes
-def search_clusters_in_random_genomes(randomized_genomes,cluster_families,thresholds):
+def search_clusters_in_random_genomes(conversion,cluster_families,thresholds):
+	conv = simplify_conversion(conversion)
 	found_clusters = {}
-	for num in randomized_genomes:
-		conversion = randomized_genomes[num]
-		print conversion.keys()
-		calculate_valid_clusters(cluster_families,thresholds,conversion)
+	for n in range(0,100):
+		conversion = randomize_genomes(conv)
+		valid_clusters = calculate_valid_clusters(cluster_families,thresholds,conversion)
+		if len(valid_clusters) != 0:
+			for fam in valid_clusters:
+				if fam not in found_clusters:
+					found_clusters[fam] = 0
+				for spe in valid_clusters[fam]:
+					found_clusters[fam] += 1
+	return found_clusters
+
+def print_family_stats(cluster_families,all_values,found_clusters,statsOutfileName):
+	outfile = open(statsOutfileName,"w")
+	families = cluster_families.keys()
+	families.sort()
+	for fam in families:
+		num_comparisons = len(cluster_families[fam])*100
+		if fam in found_clusters:
+			f = found_clusters[fam]
+		else:
+			f = 0
+		string = "%s\t%d\t%.2f\t%.2f\t%d\t%d" % (fam,len(cluster_families[fam]),all_values[fam][0],all_values[fam][1],f,num_comparisons)
+		print >>outfile,string
+	outfile.close()
 		
+			
 
 parser = argparse.ArgumentParser(description="Will perform the genome walking")
 parser.add_argument("-i","--infile",dest="inFile",action="store",default=None,help="Input file. Can change depending on the analysis run")
@@ -1375,7 +1422,6 @@ parser.add_argument("-s2","--species2",dest="species2",action="store",default=No
 parser.add_argument("-d","--outdir",dest="outDir",action="store",default="./genome_walking/",help="basepath folder where the results will be stored")
 parser.add_argument("--minSize",dest="minSize",action="store",default=5,help="Minimum size a cluster needs to have to be considered. Default is set to 5")
 parser.add_argument("--maxSize",dest="maxSize",action="store",default=35,help="Maximum size a cluster needs to have to be considered. Default is set to 35")
-parser.add_argument("--minHomologs",dest="minHomo",action="store",default=4,help="Minimum ammount of homologous genes present to consider a cluster as valid")
 parser.add_argument("--non_homologs",dest="non_homologs",action="store",default=3,help="Number of non-homologous genes needed to split a cluster")
 parser.add_argument("--threshold",dest="thr",action="store",choices=["2stdv","3stdv","1stdv","90percent","75percent"],default="2stdv",help="Way to calculate the thresholds to accept a conserved region as cluster")
 parser.add_argument("--initial_files",dest="conv",action="store_true",help="Will prompt the program to create the initial files")
@@ -1569,9 +1615,9 @@ if args.stats:
 	conversion = load_conversion(args.outDir+"/conversion_files/",species)
 	inDirThr = args.outDir+"/thresholds/"
 	thresholds = load_thresholds(inDirThr+"/all_thresholds.txt")
-	# ~ all_values = calculate_threshold_distance(cluster_families,thresholds,conversion)
-	randomized_genomes = randomize_genomes(conversion)
-	search_clusters_in_random_genomes(randomized_genomes,cluster_families,thresholds)
+	all_values = calculate_threshold_distance(cluster_families,thresholds,conversion)
+	found_clusters = search_clusters_in_random_genomes(conversion,cluster_families,thresholds)
+	print_family_stats(cluster_families,all_values,found_clusters,args.outDir+"/cluster_families.stats.txt")
 
 #Modules used to calculate running times
 if args.conv:
@@ -1608,6 +1654,13 @@ if args.cluster_comparison:
 if args.create_cluster_family:
 	create_folder(args.outDir+"/timming/")
 	outfile = open(args.outDir+"/timming/running_time_step5.txt","w")
+	timing = datetime.now() - startTime
+	print >>outfile,timing
+	outfile.close()
+
+if args.stats:
+	create_folder(args.outDir+"/timming/")
+	outfile = open(args.outDir+"/timming/running_time_step6.txt","w")
 	timing = datetime.now() - startTime
 	print >>outfile,timing
 	outfile.close()
