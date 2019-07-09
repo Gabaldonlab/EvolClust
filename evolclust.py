@@ -428,9 +428,9 @@ def get_clusters_and_thresholds(pairs,minSize,maxSize,conversion,set_difference,
 	pathAll2 = pathAll+"/"+args.species2+"/"
 	create_folder(pathAll2)
 	outfileAll1 = open(pathAll1+"/"+args.species2+".txt","w")
-	print >>outfileAll1,"#Code1\tCode2\tClusterSize1\tClusterSize2\tThreshold1\tThreshold2\tScore\tCluster1\tCluster2"
+	print >>outfileAll1,"#Code1\tCode2\tClusterSize1\tClusterSize2\tScore\tCluster1\tCluster2"
 	outfileAll2 = open(pathAll2+"/"+args.species1+".txt","w")
-	print >>outfileAll2,"#Code1\tCode2\tClusterSize1\tClusterSize2\tThreshold1\tThreshold2\tScore\tCluster1\tCluster2"
+	print >>outfileAll2,"#Code1\tCode2\tClusterSize1\tClusterSize2\tScore\tCluster1\tCluster2"
 	for p in allClusters:
 		cl1 = allClusters[p][0]
 		cl2 = allClusters[p][1]
@@ -584,15 +584,6 @@ def calculate_threshold5(values):
 	num = int(float(len(values)) * 0.75)
 	thr = values[num]
 	return thr
-
-#Threshold 6: calculates non-parametric tolerance intervals using the wilks method
-def calculate_threshold6(values):
-	vals = robjects.FloatVector(values)
-	results = tolerance.nptol_int(vals,alpha=0.05,P=0.99,side=1,method="WILKS")
-	return results[3][0]
-	
-
-
 
 ########################################################################	
 # Calculate scores
@@ -1084,6 +1075,7 @@ def get_candidates(cf,all_clusters,thresholds,maxSize,set_difference,conversion)
 	return candidates
 
 
+#Fixes the first cluster and searches whether there is a cluster in the other length of genes
 def compare_clusters(cl1,cl2,conversion,set_difference):
 	score = None
 	spe1,contig1 = list(cl1)[0].split("_")[0],list(cl1)[0].split("_")[1]
@@ -1118,6 +1110,44 @@ def compare_clusters(cl1,cl2,conversion,set_difference):
 			score = calculate_score(cluster1,cluster2,conversion)
 		else:
 			score = None
+	return cluster2,score
+	
+#Fixes the first cluster and searches whether there is a cluster in the other length of genes
+def compare_clusters_to_random(cl1,cl2,conversionN,conversionR,set_difference):
+	score = None
+	spe1,contig1 = list(cl1)[0].split("_")[0],list(cl1)[0].split("_")[1]
+	#Sort them
+	cluster1 = sorted(list(cl1),key=lambda x: int(x.split("_")[2]))
+	#Convert them into their protein family codes
+	cluster1Trans = [conversionN[spe1][contig1][x] for x in cluster1 if x in conversionN[spe1][contig1]]
+	#Repeat for second contig
+	spe2,contig2 = list(cl2)[0].split("_")[0],list(cl2)[0].split("_")[1]
+	#Sort them
+	cluster2 = sorted(list(cl2),key=lambda x: int(x.split("_")[2]))
+	#Convert them into their protein family codes
+	cluster2Trans = [conversionR[spe2][contig2][x] for x in cluster2 if x in conversionR[spe2][contig2]]	
+	#Trim edges
+	cluster2 = trim_clusters(cluster2,cluster2Trans,cluster1Trans)
+	cluster2Trans = [conversionR[spe2][contig2][x] for x in cluster2 if x in conversionR[spe2][contig2]]
+	if len(cluster2) !=0:
+		groups = cut_cluster_without_seed(cluster2,cluster1Trans,set_difference,conversionR[spe2][contig2])
+		min_common = 0
+		chosen = None
+		if len(groups) != 0:
+			for group in groups:
+				cl2Trans = set([conversionR[spe2][contig2][x] for x in group if x in conversionR[spe2][contig2]])
+				cl1Trans = set(cluster1Trans)
+				common = cl1Trans.intersection(cl2Trans)
+				if len(common) >= 3:
+					if len(common) > min_common:
+						chosen = group
+						min_common = len(common)
+		if chosen != None:
+			cluster2 = chosen
+			score = calculate_score(cluster1,cluster2,conversion)
+		else:
+			score = None
+			cluster2 = None
 	return cluster2,score
 
 #Cut the cluster in pieces by parts where more than three non-homologous proteins are found
@@ -1286,8 +1316,7 @@ def calculate_threshold_distance(cluster_families,thresholds,conversion):
 			clA = cluster_families[fam][species[a]]
 			for b in range(a+1,len(species)):
 				clB = cluster_families[fam][species[b]]
-				clusterA,scoreA = compare_clusters(clA,clB,conversion,set_difference)
-				clusterB,scoreB = compare_clusters(clB,clA,conversion,set_difference)
+				score = calculate_score(clA,clB,conversion)
 				speA = species[a].split("_")[0]
 				speB = species[b].split("_")[0]
 				if speA == speB:
@@ -1298,68 +1327,59 @@ def calculate_threshold_distance(cluster_families,thresholds,conversion):
 					numB = len(clB)
 					if len(clA) > maxSize:
 						numA = maxSize
-					elif len(clA) < minSize:
-						numA = minSize
 					if len(clB) > maxSize:
 						numB = maxSize
-					elif len(clB) < minSize:
+					if len(clA) < minSize:
+						numA = minSize
+					if len(clB) < minSize:
 						numB = minSize
 					thrA = thresholds[speA][speB][numA]
 					thrB = thresholds[speB][speA][numB]
-				if scoreA < thrA:
+				if score < thrA:
 					scoreA = thrA
-				if scoreB < thrB:
+				else:
+					scoreA = score
+				if score < thrB:
 					scoreB = thrB
+				else:
+					scoreB = score
 				diff = (abs(thrA - scoreA) + abs(thrB - scoreB)) / 2.0
 				delta_values.append(diff)
 		all_values[fam] = [numpy.average(delta_values),numpy.std(delta_values)]
 	return all_values
 
 #For each cluster family it calculates the average CS score and the difference between the score and the thresholds
-def calculate_valid_clusters(cluster_families,thresholds,conversion):
+def calculate_valid_clusters(cluster_families,thresholds,Nconversion,Rconversion,fam2prot):
 	valid_clusters = {}
 	for fam in cluster_families:
-		species = cluster_families[fam].keys()
-		for a in range(0,len(species)):
-			clA = cluster_families[fam][species[a]]
-			for b in range(a+1,len(species)):
-				clB = cluster_families[fam][species[b]]
-				clusterA,scoreA = compare_clusters(clA,clB,conversion,set_difference)
-				clusterB,scoreB = compare_clusters(clB,clA,conversion,set_difference)
-				# ~ if scoreA or scoreB:
-				speA = species[a].split("_")[0]
-				speB = species[b].split("_")[0]
-				if speA == speB:
-					thrA = 1.0
-					thrB = 1.0
-				else:
-					numA = len(clA)
-					numB = len(clB)
-					if len(clA) > maxSize:
-						numA = maxSize
-					elif len(clA) < minSize:
-						numA = minSize
-					if len(clB) > maxSize:
-						numB = maxSize
-					elif len(clB) < minSize:
-						numB = minSize
-					thrA = thresholds[speA][speB][numA]
-					thrB = thresholds[speB][speA][numB]
-				if scoreA:
-					if scoreA > thrA:
-						if fam not in valid_clusters:
-							valid_clusters[fam] = set([])
-						valid_clusters[fam].add(species[a])
-				if scoreB:
-					if scoreB > thrB:
-						if fam not in valid_clusters:
-							valid_clusters[fam] = set([])
-						valid_clusters[fam].add(species[b])	
+		for name in cluster_families[fam]:
+			cluster = cluster_families[fam][name]
+			spe = name.split("_")[0]
+			#Search which contigs of the random genome have a putative homolog
+			all_contigs = set([])
+			for prot in cluster:
+				contig = prot.split("_")[1]
+				if prot in Nconversion[spe][contig]:
+					protFam = Nconversion[spe][contig][prot]
+					if spe in fam2prot:
+						if protFam in fam2prot[spe]:
+							for p in fam2prot[spe][protFam]:
+								new_contig = p.split("_")[1]
+								all_contigs.add(new_contig)
+			for contig in all_contigs:
+				cluster2 = Rconversion[spe][contig]
+				cluster2,score = compare_clusters_to_random(cluster,cluster2,Nconversion,Rconversion,set_difference)
+				if score >= 0.1:
+					if fam not in valid_clusters:
+						valid_clusters[fam] = {}
+						if name not in valid_clusters:
+							valid_clusters[fam][name] = score
 	return valid_clusters
 
 #Create a 100 random genomes from each of the species considered
-def randomize_genomes(conv):
+def randomize_genomes(conversion):
 	random_genomes = {}
+	conv = simplify_conversion(conversion)	
 	for spe in conv:
 		genes = conv[spe].keys()
 		values = conv[spe].values()
@@ -1383,12 +1403,13 @@ def simplify_conversion(conversion):
 	return conv
 
 #Searches whether clusters are found in random genomes
-def search_clusters_in_random_genomes(conversion,cluster_families,thresholds):
-	conv = simplify_conversion(conversion)
+def search_clusters_in_random_genomes(Nconversion,cluster_families,thresholds):
 	found_clusters = {}
-	for n in range(0,100):
-		conversion = randomize_genomes(conv)
-		valid_clusters = calculate_valid_clusters(cluster_families,thresholds,conversion)
+	for a in range(0,100):
+		print a
+		Rconversion = randomize_genomes(conversion)
+		fam2prot = relate_families_to_proteins(Rconversion)
+		valid_clusters = calculate_valid_clusters(cluster_families,thresholds,Nconversion,Rconversion,fam2prot)
 		if len(valid_clusters) != 0:
 			for fam in valid_clusters:
 				if fam not in found_clusters:
@@ -1396,6 +1417,19 @@ def search_clusters_in_random_genomes(conversion,cluster_families,thresholds):
 				for spe in valid_clusters[fam]:
 					found_clusters[fam] += 1
 	return found_clusters
+
+#Creates a dictionary that realtes, for each species, the list of proteins that belong to each protein family
+def relate_families_to_proteins(conversion):
+	fam2prot = {}
+	for spe in conversion:
+		fam2prot[spe] = {}
+		for contig in conversion[spe]:
+			for prot in conversion[spe][contig]:
+				f = conversion[spe][contig][prot]
+				if f not in fam2prot[spe]:
+					fam2prot[spe][f] = set([])
+				fam2prot[spe][f].add(prot)
+	return fam2prot
 
 def print_family_stats(cluster_families,all_values,found_clusters,statsOutfileName):
 	outfile = open(statsOutfileName,"w")
