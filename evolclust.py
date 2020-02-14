@@ -1,7 +1,7 @@
 #!/usr/bin/env python
 
 """
-  Evolclust v1.0 - automated pipeline to detect regions of conserved gene
+  Evolclust v1.01 - automated pipeline to detect regions of conserved gene
   order using comparative genomics.
   Copyright (C) 2017 - Marina Marcet-Houben, Toni Gabaldon
   This program is free software: you can redistribute it and/or modify
@@ -24,6 +24,7 @@ from random import randint
 from random import shuffle
 import subprocess as sp
 import sys
+import gzip
 from datetime import datetime
 import itertools
 startTime = datetime.now()
@@ -107,10 +108,10 @@ def load_conversion(dirName,species):
 	
 #Load homologous pairs of proteins into memory
 def load_pairs(spe1,spe2,outDir):
-	fileName = outDir+"/"+spe1+"/"+spe2+".txt"
+	fileName = outDir+"/"+spe1+"/"+spe2+".txt.gz"
 	if os.path.exists(fileName):
 		pairs = []
-		for line in open(outDir+"/"+spe1+"/"+spe2+".txt"):
+		for line in gzip.open(outDir+"/"+spe1+"/"+spe2+".txt.gz"):
 			line = line.strip()
 			dades = line.split()
 			p = dades[2]+"-"+dades[3]
@@ -188,6 +189,8 @@ def build_pairs(fileName,outDir):
 			for p in pairs[s]:
 				print >>outfile,spe,s,p.split("-")[0],p.split("-")[1]
 			outfile.close()
+			cmd = "gzip "+outfolder+"/"+s+".txt"
+			run_command(cmd,False)
 
 
 #Creates jobs list that will automatize the process
