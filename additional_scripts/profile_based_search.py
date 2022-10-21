@@ -38,7 +38,6 @@ def get_clusters(info,outfile,families):
     genes = list(info.keys())
     if len(genes) != 0:
         genes = sorted(genes,key=lambda x:int(x.split("_")[2]))
-
         groups = []
         new_group = [genes[0]]
         for gene in genes[1:]:
@@ -59,6 +58,8 @@ def get_clusters(info,outfile,families):
                 if len(new_group) >= 4:
                     groups.append(new_group)
                 new_group = [gene]
+        if len(new_group) >= 4:
+            groups.append(new_group)
 
         for group in groups:
             found_fams = set([])
@@ -139,5 +140,3 @@ if len(detected_clusters) != 0:
     print("Check file "+outFolder+"/results_search."+HMM+".txt for the resulting cluster")
 else:
     print("No clusters detected")
- 
-
